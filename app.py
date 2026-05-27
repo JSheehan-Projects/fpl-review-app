@@ -52,17 +52,15 @@ def get_league_managers(league_id, limit=10):
     if response.status_code == 200:
         data = response.json()
         standings = data.get('standings', {}).get('results', [])
-        # Format as "Player Name (Team Name)"
         return {
             manager['entry']: f"{manager['player_name']} ({manager['entry_name']})" 
             for manager in standings[:limit]
         }
     return {}
 
-# 1. Ask for the FPL ID with NO default and NO placeholder.
+# Input FPL ID
 main_id = st.text_input("Enter your FPL ID:", value="")
 
-# 2. Everything below this line only loads AFTER they type an ID
 if main_id:
     # Fetch leagues for the drop-down menu
     leagues_dict = get_manager_leagues(main_id)
@@ -77,19 +75,18 @@ if main_id:
     
     plot_data = []
     
-    # Fetch the main user's data and real name
+    # Fetch the main user's data
     df_main = get_manager_history(main_id)
     if not df_main.empty:
         df_main['Manager'] = get_manager_name(main_id)
         plot_data.append(df_main)
             
-    # Fetch and append league managers if a league is selected
+    # Fetch league managers if applicable
     if selected_league != "Just my team":
         league_id = leagues_dict[selected_league]
         league_managers = get_league_managers(league_id)
         
         progress_bar = st.progress(0, text="Fetching league history...")
-        
         for i, (mgr_id, mgr_name) in enumerate(league_managers.items()):
             if str(mgr_id) != str(main_id): 
                 df_mgr = get_manager_history(mgr_id)
@@ -99,18 +96,41 @@ if main_id:
             progress_bar.progress((i + 1) / len(league_managers), text="Fetching league history...")
         progress_bar.empty()
 
-    # Visualise the data
     if plot_data:
         final_df = pd.concat(plot_data, ignore_index=True)
-        fig = px.line(
-            final_df, 
-            x="Gameweek", 
-            y="Total Points", 
-            color="Manager", 
-            markers=True, 
-            title=f"Total Points Evolution - {selected_league if selected_league != 'Just my team' else 'Individual'}"
+        
+        # Filter out non-competitive players using a multiselect filter
+        all_managers = final_df['Manager'].unique().tolist()
+        selected_managers = st.multiselect(
+            "Filter Managers:", 
+            options=all_managers, 
+            default=all_managers,
+            help="Untick managers to remove them from the chart entirely."
         )
-        fig.update_layout(xaxis=dict(tickmode='linear', dtick=1)) 
-        st.plotly_chart(fig, use_container_width=True)
+        
+        filtered_df = final_df[final_df['Manager'].isin(selected_managers)]
+        
+        if not filtered_df.empty:
+            fig = px.line(
+                filtered_df, 
+                x="Gameweek", 
+                y="Total Points", 
+                color="Manager", 
+                markers=True, 
+                title=f"Total Points Evolution - {selected_league if selected_league != 'Just my team' else 'Individual'}"
+            )
+            
+            # Fix X-axis to start exactly at Gameweek 1 and avoid negative/zero values
+            max_gw = int(filtered_df['Gameweek'].max())
+            fig.update_layout(
+                xaxis=dict(
+                    tickmode='linear', 
+                    dtick=1,
+                    range=[1, max_gw]
+                )
+            ) 
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Please select at least one manager to display the graph.")
     else:
         st.warning("No data found. Please check the FPL ID.")
