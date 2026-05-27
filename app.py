@@ -44,17 +44,21 @@ def get_league_managers(league_id, limit=10):
         return {manager['entry']: manager['entry_name'] for manager in standings[:limit]}
     return {}
 
-# UI Inputs
-col1, col2 = st.columns(2)
-with col1:
-    main_id = st.text_input("Your FPL ID", value="20123")
-with col2:
-    compare_id = st.text_input("Comparison FPL ID (Optional)", value="5583436")
+# 1. Ask for the FPL ID with no default value. 
+# Using a placeholder gives them a hint without filling the box.
+main_id = st.text_input("Enter your FPL ID:", value="", placeholder="e.g., 20123")
 
+# 2. Everything below this line only loads AFTER they type an ID
 if main_id:
     # Fetch leagues for the drop-down menu
     leagues_dict = get_manager_leagues(main_id)
-    league_options = ["None (Just compare IDs)"] + list(leagues_dict.keys())
+    
+    # Update the default option since the 1v1 comparison is gone
+    if not leagues_dict:
+        st.warning("Could not find any private leagues for this ID. Showing individual data only.")
+        league_options = ["Just my team"]
+    else:
+        league_options = ["Just my team"] + list(leagues_dict.keys())
     
     selected_league = st.selectbox("Compare against a league (Top 10 managers)", league_options)
     
@@ -65,43 +69,13 @@ if main_id:
     if not df_main.empty:
         df_main['Manager'] = f"Main ID: {main_id}"
         plot_data.append(df_main)
-        
-    # Fetch comparison ID if no league is selected or as an additional line
-    if compare_id and selected_league == "None (Just compare IDs)":
-        df_comp = get_manager_history(compare_id)
-        if not df_comp.empty:
-            df_comp['Manager'] = f"Comparison ID: {compare_id}"
-            plot_data.append(df_comp)
             
     # Fetch and append league managers if a league is selected
-    if selected_league != "None (Just compare IDs)":
+    if selected_league != "Just my team":
         league_id = leagues_dict[selected_league]
         league_managers = get_league_managers(league_id)
         
         progress_bar = st.progress(0, text="Fetching league history...")
         
         for i, (mgr_id, mgr_name) in enumerate(league_managers.items()):
-            if str(mgr_id) != str(main_id): 
-                df_mgr = get_manager_history(mgr_id)
-                if not df_mgr.empty:
-                    df_mgr['Manager'] = mgr_name
-                    plot_data.append(df_mgr)
-            progress_bar.progress((i + 1) / len(league_managers), text="Fetching league history...")
-        progress_bar.empty()
-
-    # Visualise the data
-    if plot_data:
-        final_df = pd.concat(plot_data, ignore_index=True)
-        fig = px.line(
-            final_df, 
-            x="Gameweek", 
-            y="Total Points", 
-            color="Manager", 
-            markers=True, 
-            title=f"Total Points Evolution - {selected_league if selected_league != 'None (Just compare IDs)' else 'Head to Head'}"
-        )
-        # Force the X-axis to show integers for Gameweeks
-        fig.update_layout(xaxis=dict(tickmode='linear', dtick=1)) 
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("No data found. Please check the FPL IDs.")
+            if str(mgr_id) != str(main_id
