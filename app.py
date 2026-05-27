@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
-import numpy as np
 
 st.set_page_config(page_title="FPL Points Tracker", layout="wide")
 st.title("FPL Total Points Evolution")
@@ -45,6 +44,21 @@ def get_manager_transfers(manager_id):
         if not df.empty:
             df['time'] = pd.to_datetime(df['time'])
             return df[['event', 'time']]
+    return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_gameweek_deadlines():
+    """Fetches the official deadline time for every gameweek."""
+    url = f"{BASE_URL}/bootstrap-static/"
+    response = requests.get(url, headers=HEADERS)
+    if response.status_code == 200:
+        data = response.json()
+        events = pd.DataFrame(data.get('events', []))
+        if not events.empty:
+            # 'id' is the gameweek number in this endpoint
+            df = events[['id', 'deadline_time']].rename(columns={'id': 'Gameweek'})
+            df['deadline_time'] = pd.to_datetime(df['deadline_time'])
+            return df
     return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -100,7 +114,7 @@ if main_id:
     selected_league = st.selectbox("Compare against a league (Top 10 managers)", league_options)
     
     plot_data = []
-    manager_name_to_id = {} # We need this to fetch transfers for specific filtered managers later
+    manager_name_to_id = {} 
     
     # Fetch the main user's data
     df_main = get_manager_history(main_id)
@@ -117,7 +131,7 @@ if main_id:
         
         progress_bar = st.progress(0, text="Fetching league history...")
         for i, (mgr_id, mgr_name) in enumerate(league_managers.items()):
-            manager_name_to_id[mgr_name] = mgr_id # Store ID mapping
+            manager_name_to_id[mgr_name] = mgr_id 
             if str(mgr_id) != str(main_id): 
                 df_mgr = get_manager_history(mgr_id)
                 if not df_mgr.empty:
@@ -130,7 +144,7 @@ if main_id:
         final_df = pd.concat(plot_data, ignore_index=True)
         max_gw = int(final_df['Gameweek'].max())
         
-        # Filter out non-competitive players using a multiselect filter
+        # Filter out non-competitive players
         all_managers = final_df['Manager'].unique().tolist()
         selected_managers = st.multiselect(
             "Filter Managers:", 
@@ -159,11 +173,13 @@ if main_id:
             fig_points.update_layout(xaxis=dict(tickmode='linear', dtick=1, range=[1, max_gw])) 
             st.plotly_chart(fig_points, use_container_width=True)
 
-            # --- FETCH TRANSFER DATA FOR FILTERED MANAGERS ---
+            # --- FETCH TRANSFER & DEADLINE DATA ---
             st.subheader("Transfer Timing Analysis")
             transfer_list = []
             
-            with st.spinner("Fetching transfer data..."):
+            with st.spinner("Fetching transfer data and official deadlines..."):
+                deadlines_df = get_gameweek_deadlines()
+                
                 for mgr_name in selected_managers:
                     mgr_id = manager_name_to_id[mgr_name]
                     df_trans = get_manager_transfers(mgr_id)
@@ -171,58 +187,49 @@ if main_id:
                         df_trans['Manager'] = mgr_name
                         transfer_list.append(df_trans)
             
-            if transfer_list:
+            if transfer_list and not deadlines_df.empty:
                 all_transfers = pd.concat(transfer_list, ignore_index=True)
                 all_transfers.rename(columns={'event': 'Gameweek'}, inplace=True)
                 
-                # Find the absolute latest transfer time per gameweek across the selected group
-                latest_per_gw = all_transfers.groupby('Gameweek')['time'].max().reset_index()
-                latest_per_gw.rename(columns={'time': 'latest_gw_time'}, inplace=True)
+                # Merge official deadlines with the transfers
+                all_transfers = pd.merge(all_transfers, deadlines_df, on='Gameweek', how='inner')
                 
-                # Merge the latest time back to the main transfer dataframe
-                all_transfers = pd.merge(all_transfers, latest_per_gw, on='Gameweek')
-                
-                # Calculate how many hours BEFORE the latest transfer this specific transfer was made
-                all_transfers['Hours Before Latest'] = (all_transfers['latest_gw_time'] - all_transfers['time']).dt.total_seconds() / 3600
+                # Calculate hours BEFORE the official deadline
+                all_transfers['Hours Before Deadline'] = (all_transfers['deadline_time'] - all_transfers['time']).dt.total_seconds() / 3600
 
                 # --- GRAPH 2: INDIVIDUAL TRANSFERS SCATTER PLOT ---
                 fig_scatter = px.scatter(
                     all_transfers, 
                     x="Gameweek", 
-                    y="Hours Before Latest", 
+                    y="Hours Before Deadline", 
                     color="Manager",
-                    hover_data={"time": True}, # Shows exact timestamp on hover
-                    title="All Transfers: Hours Prior to the Latest Transfer of the Week",
-                    labels={"Hours Before Latest": "Hours Before Latest Transfer"}
+                    hover_data={
+                        "time": True,
+                        "deadline_time": True,
+                        "Hours Before Deadline": ":.1f"
+                    },
+                    title="All Transfers: Hours Prior to the Official Gameweek Deadline"
                 )
-                # Invert Y-axis so '0' (the latest) is at the bottom, and early transfers are high up
                 fig_scatter.update_layout(xaxis=dict(tickmode='linear', dtick=1, range=[1, max_gw]))
                 st.plotly_chart(fig_scatter, use_container_width=True)
 
                 # --- GRAPH 3: AVERAGE TRANSFER TIME LINE PLOT ---
-                # Calculate the mean hours before latest per manager per gameweek
-                avg_transfers = all_transfers.groupby(['Manager', 'Gameweek'])['Hours Before Latest'].mean().reset_index()
+                avg_transfers = all_transfers.groupby(['Manager', 'Gameweek'])['Hours Before Deadline'].mean().reset_index()
                 
-                # To break the line between empty gameweeks, we must create a grid of ALL gameweeks for ALL managers
-                # and merge our data into it. Missing gameweeks will become NaN, which Plotly uses to break the line.
                 gw_range = pd.DataFrame({'Gameweek': range(1, max_gw + 1)})
                 mgr_range = pd.DataFrame({'Manager': selected_managers})
                 
-                # Cross join to get every combination of Manager and Gameweek
                 grid = pd.merge(mgr_range.assign(key=1), gw_range.assign(key=1), on='key').drop('key', axis=1)
-                
-                # Merge the actual averages onto the grid
                 final_avg_df = pd.merge(grid, avg_transfers, on=['Manager', 'Gameweek'], how='left')
 
                 fig_line = px.line(
                     final_avg_df, 
                     x="Gameweek", 
-                    y="Hours Before Latest", 
+                    y="Hours Before Deadline", 
                     color="Manager",
                     markers=True,
-                    title="Average Transfer Time per Gameweek (Breaks on missing gameweeks)"
+                    title="Average Transfer Timing per Gameweek (Breaks on zero transfers)"
                 )
-                # Ensure lines don't connect across NaNs
                 fig_line.update_traces(connectgaps=False) 
                 fig_line.update_layout(xaxis=dict(tickmode='linear', dtick=1, range=[1, max_gw]))
                 st.plotly_chart(fig_line, use_container_width=True)
