@@ -78,4 +78,27 @@ if main_id:
         progress_bar = st.progress(0, text="Fetching league history...")
         
         for i, (mgr_id, mgr_name) in enumerate(league_managers.items()):
-            if str(mgr_id) != str(main_id)
+            if str(mgr_id) != str(main_id): 
+                df_mgr = get_manager_history(mgr_id)
+                if not df_mgr.empty:
+                    df_mgr['Manager'] = mgr_name
+                    plot_data.append(df_mgr)
+            progress_bar.progress((i + 1) / len(league_managers), text="Fetching league history...")
+        progress_bar.empty()
+
+    # Visualise the data
+    if plot_data:
+        final_df = pd.concat(plot_data, ignore_index=True)
+        fig = px.line(
+            final_df, 
+            x="Gameweek", 
+            y="Total Points", 
+            color="Manager", 
+            markers=True, 
+            title=f"Total Points Evolution - {selected_league if selected_league != 'Just my team' else 'Individual'}"
+        )
+        # Force the X-axis to show integers for Gameweeks
+        fig.update_layout(xaxis=dict(tickmode='linear', dtick=1)) 
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("No data found. Please check the FPL ID.")
