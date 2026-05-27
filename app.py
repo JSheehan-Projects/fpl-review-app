@@ -22,6 +22,18 @@ def get_manager_history(manager_id):
     return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
+def get_manager_name(manager_id):
+    """Fetches the real name and team name for a specific manager ID."""
+    url = f"{BASE_URL}/entry/{manager_id}/"
+    response = requests.get(url, headers=HEADERS)
+    if response.status_code == 200:
+        data = response.json()
+        player_name = f"{data.get('player_first_name', '')} {data.get('player_last_name', '')}".strip()
+        team_name = data.get('name', 'Unknown Team')
+        return f"{player_name} ({team_name})"
+    return f"Manager ID: {manager_id}"
+
+@st.cache_data(ttl=3600)
 def get_manager_leagues(manager_id):
     """Fetches the private classic leagues a manager is in."""
     url = f"{BASE_URL}/entry/{manager_id}/"
@@ -29,31 +41,32 @@ def get_manager_leagues(manager_id):
     if response.status_code == 200:
         data = response.json()
         leagues = data.get('leagues', {}).get('classic', [])
-        # 'x' filters for private leagues, removing the massive global ones
         return {league['name']: league['id'] for league in leagues if league['league_type'] == 'x'}
     return {}
 
 @st.cache_data(ttl=3600)
 def get_league_managers(league_id, limit=10):
-    """Fetches the top managers in a classic league."""
+    """Fetches the top managers in a classic league with real names and team names."""
     url = f"{BASE_URL}/leagues-classic/{league_id}/standings/"
     response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
         data = response.json()
         standings = data.get('standings', {}).get('results', [])
-        return {manager['entry']: manager['entry_name'] for manager in standings[:limit]}
+        # Format as "Player Name (Team Name)"
+        return {
+            manager['entry']: f"{manager['player_name']} ({manager['entry_name']})" 
+            for manager in standings[:limit]
+        }
     return {}
 
-# 1. Ask for the FPL ID with no default value. 
-# Using a placeholder gives them a hint without filling the box.
-main_id = st.text_input("Enter your FPL ID:", value="", placeholder="e.g., 20123")
+# 1. Ask for the FPL ID with NO default and NO placeholder.
+main_id = st.text_input("Enter your FPL ID:", value="")
 
 # 2. Everything below this line only loads AFTER they type an ID
 if main_id:
     # Fetch leagues for the drop-down menu
     leagues_dict = get_manager_leagues(main_id)
     
-    # Update the default option since the 1v1 comparison is gone
     if not leagues_dict:
         st.warning("Could not find any private leagues for this ID. Showing individual data only.")
         league_options = ["Just my team"]
@@ -64,10 +77,10 @@ if main_id:
     
     plot_data = []
     
-    # Fetch the main user's data
+    # Fetch the main user's data and real name
     df_main = get_manager_history(main_id)
     if not df_main.empty:
-        df_main['Manager'] = f"Main ID: {main_id}"
+        df_main['Manager'] = get_manager_name(main_id)
         plot_data.append(df_main)
             
     # Fetch and append league managers if a league is selected
@@ -97,7 +110,6 @@ if main_id:
             markers=True, 
             title=f"Total Points Evolution - {selected_league if selected_league != 'Just my team' else 'Individual'}"
         )
-        # Force the X-axis to show integers for Gameweeks
         fig.update_layout(xaxis=dict(tickmode='linear', dtick=1)) 
         st.plotly_chart(fig, use_container_width=True)
     else:
