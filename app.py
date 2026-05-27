@@ -78,4 +78,4 @@ if main_id:
         progress_bar = st.progress(0, text="Fetching league history...")
         
         for i, (mgr_id, mgr_name) in enumerate(league_managers.items()):
-            if str(mgr_id) != str(main_id
+            if str(mgr_id) != str(main_id)
