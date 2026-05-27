@@ -18,7 +18,24 @@ def get_manager_history(manager_id):
         data = response.json()
         df = pd.DataFrame(data.get('current', []))
         if not df.empty:
-            return df[['event', 'total_points']].rename(columns={'event': 'Gameweek', 'total_points': 'Total Points'})
+            # Map the exact API keys to clean, readable column names for the tooltip
+            columns_to_keep = {
+                'event': 'Gameweek',
+                'total_points': 'Total Points',
+                'points': 'GW Points',
+                'overall_rank': 'Overall Rank',
+                'bank': 'Bank (£m)',
+                'event_transfers': 'Transfers',
+                'event_transfers_cost': 'Hit Cost',
+                'points_on_bench': 'Bench Points'
+            }
+            # Filter the dataframe and rename the columns
+            df = df[list(columns_to_keep.keys())].rename(columns=columns_to_keep)
+            
+            # Divide bank by 10 to reflect true £m value
+            df['Bank (£m)'] = df['Bank (£m)'] / 10
+            
+            return df
     return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -111,12 +128,24 @@ if main_id:
         filtered_df = final_df[final_df['Manager'].isin(selected_managers)]
         
         if not filtered_df.empty:
+            # We add hover_data here to tell Plotly to display our new columns
             fig = px.line(
                 filtered_df, 
                 x="Gameweek", 
                 y="Total Points", 
                 color="Manager", 
                 markers=True, 
+                hover_data={
+                    "Manager": True,
+                    "Gameweek": True,
+                    "Total Points": True,
+                    "GW Points": True,
+                    "Overall Rank": ":,", # The :, automatically formats with commas
+                    "Bank (£m)": ":.1f",  # The :.1f forces one decimal place (e.g., 0.0)
+                    "Transfers": True,
+                    "Hit Cost": True,
+                    "Bench Points": True
+                },
                 title=f"Total Points Evolution - {selected_league if selected_league != 'Just my team' else 'Individual'}"
             )
             
