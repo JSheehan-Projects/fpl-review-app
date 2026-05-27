@@ -55,7 +55,6 @@ def get_gameweek_deadlines():
         data = response.json()
         events = pd.DataFrame(data.get('events', []))
         if not events.empty:
-            # 'id' is the gameweek number in this endpoint
             df = events[['id', 'deadline_time']].rename(columns={'id': 'Gameweek'})
             df['deadline_time'] = pd.to_datetime(df['deadline_time'])
             return df
@@ -150,7 +149,7 @@ if main_id:
             "Filter Managers:", 
             options=all_managers, 
             default=all_managers,
-            help="Untick managers to remove them from all charts."
+            help="Untick managers to remove them from all charts and tables."
         )
         
         filtered_df = final_df[final_df['Manager'].isin(selected_managers)]
@@ -174,8 +173,8 @@ if main_id:
             st.plotly_chart(fig_points, use_container_width=True)
 
             # --- FETCH TRANSFER & DEADLINE DATA ---
-            st.subheader("Transfer Timing Analysis")
             transfer_list = []
+            deadlines_df = pd.DataFrame()
             
             with st.spinner("Fetching transfer data and official deadlines..."):
                 deadlines_df = get_gameweek_deadlines()
@@ -187,17 +186,68 @@ if main_id:
                         df_trans['Manager'] = mgr_name
                         transfer_list.append(df_trans)
             
+            all_transfers = pd.DataFrame()
             if transfer_list and not deadlines_df.empty:
                 all_transfers = pd.concat(transfer_list, ignore_index=True)
                 all_transfers.rename(columns={'event': 'Gameweek'}, inplace=True)
-                
-                # Merge official deadlines with the transfers
                 all_transfers = pd.merge(all_transfers, deadlines_df, on='Gameweek', how='inner')
-                
-                # Calculate hours BEFORE the official deadline
                 all_transfers['Hours Before Deadline'] = (all_transfers['deadline_time'] - all_transfers['time']).dt.total_seconds() / 3600
 
-                # --- GRAPH 2: INDIVIDUAL TRANSFERS SCATTER PLOT ---
+            # --- SUMMARY STATISTICS TABLE ---
+            st.subheader("Manager Summary Statistics")
+            
+            # Aggregate stats from the main history dataframe
+            history_stats = filtered_df.groupby('Manager').agg(
+                Total_Transfers=('Transfers', 'sum'),
+                Total_Hits_Cost=('Hit Cost', 'sum'),
+                Total_Bench_Points=('Bench Points', 'sum')
+            ).reset_index()
+            history_stats['Hits Taken'] = history_stats['Total_Hits_Cost'] / 4
+            
+            # If transfer data exists, aggregate timing stats; otherwise, create empty columns
+            if not all_transfers.empty:
+                timing_stats = all_transfers.groupby('Manager').agg(
+                    Avg_Timing=('Hours Before Deadline', 'mean'),
+                    Earliest_Transfer=('Hours Before Deadline', 'max'),
+                    Latest_Transfer=('Hours Before Deadline', 'min')
+                ).reset_index()
+                summary_df = pd.merge(history_stats, timing_stats, on='Manager', how='left')
+            else:
+                summary_df = history_stats.copy()
+                summary_df['Avg_Timing'] = None
+                summary_df['Earliest_Transfer'] = None
+                summary_df['Latest_Transfer'] = None
+
+            # Rename columns for a clean UI presentation
+            summary_df.rename(columns={
+                'Total_Transfers': 'Total Transfers',
+                'Total_Hits_Cost': 'Points Lost to Hits',
+                'Total_Bench_Points': 'Points Left on Bench',
+                'Avg_Timing': 'Avg Hrs Before Deadline',
+                'Earliest_Transfer': 'Earliest Transfer (Hrs)',
+                'Latest_Transfer': 'Latest Transfer (Hrs)'
+            }, inplace=True)
+
+            # Reorder the columns logically
+            summary_df = summary_df[['Manager', 'Total Transfers', 'Hits Taken', 'Points Lost to Hits', 'Points Left on Bench', 'Avg Hrs Before Deadline', 'Earliest Transfer (Hrs)', 'Latest Transfer (Hrs)']]
+
+            # Format the output dataframe to fix decimals and hide the index
+            st.dataframe(
+                summary_df.style.format({
+                    'Avg Hrs Before Deadline': "{:.1f}",
+                    'Earliest Transfer (Hrs)': "{:.1f}",
+                    'Latest Transfer (Hrs)': "{:.1f}",
+                    'Hits Taken': "{:.0f}"
+                }), 
+                use_container_width=True, 
+                hide_index=True
+            )
+
+            # --- RENDER TRANSFER GRAPHS ---
+            if not all_transfers.empty:
+                st.subheader("Transfer Timing Analysis")
+
+                # Scatter Plot
                 fig_scatter = px.scatter(
                     all_transfers, 
                     x="Gameweek", 
@@ -213,9 +263,8 @@ if main_id:
                 fig_scatter.update_layout(xaxis=dict(tickmode='linear', dtick=1, range=[1, max_gw]))
                 st.plotly_chart(fig_scatter, use_container_width=True)
 
-                # --- GRAPH 3: AVERAGE TRANSFER TIME LINE PLOT ---
+                # Line Plot
                 avg_transfers = all_transfers.groupby(['Manager', 'Gameweek'])['Hours Before Deadline'].mean().reset_index()
-                
                 gw_range = pd.DataFrame({'Gameweek': range(1, max_gw + 1)})
                 mgr_range = pd.DataFrame({'Manager': selected_managers})
                 
